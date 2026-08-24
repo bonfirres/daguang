@@ -1,0 +1,102 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<link rel="icon" href="data:," />
+<title>空手挪灯 · 实时深度打光 (DINOv2 + TypeGPU)</title>
+<style>
+  :root { --bg:#f6f7f9; --panel:#fff; --ink:#1f2329; --muted:#6b7280; --line:#e5e7eb; --accent:#ff5a1f; }
+  * { box-sizing: border-box; }
+  body { margin:0; font-family: system-ui, "PingFang SC", "Microsoft YaHei", sans-serif;
+         background: var(--bg); color: var(--ink); }
+  header { padding: 16px 20px; border-bottom: 1px solid var(--line); background: var(--panel); }
+  header h1 { margin:0; font-size: 18px; }
+  header p { margin:4px 0 0; color: var(--muted); font-size: 13px; }
+  .wrap { display:flex; gap:16px; padding:16px; align-items:flex-start; flex-wrap:wrap; }
+  .stage { position:relative; flex:1 1 640px; min-width:320px; }
+  canvas#output { width:100%; height:auto; background:#000; border-radius:10px; display:block;
+                  aspect-ratio: 16/9; cursor:crosshair; }
+  .controls { flex:0 0 280px; background: var(--panel); border:1px solid var(--line);
+              border-radius:10px; padding:16px; }
+  .controls h2 { font-size:14px; margin:0 0 10px; }
+  label { display:block; font-size:12px; color:var(--muted); margin:12px 0 4px; }
+  input[type=range] { width:100%; }
+  .row { display:flex; align-items:center; gap:8px; margin-top:12px; }
+  button { background: var(--accent); color:#fff; border:0; border-radius:8px;
+           padding:10px 16px; font-size:14px; cursor:pointer; }
+  button:disabled { opacity:.5; cursor:default; }
+  .status { font-size:12px; color:var(--muted); margin-top:12px; line-height:1.5; }
+  .fps { font-size:12px; color:var(--accent); margin-top:6px; font-variant-numeric: tabular-nums; }
+  .light { font-size:12px; margin-top:6px; color:var(--ink); }
+  .hint { font-size:11px; color:var(--muted); margin-top:10px; line-height:1.5; }
+  video#cam { position:absolute; width:1px; height:1px; opacity:0; pointer-events:none; left:-10px; top:-10px; }
+</style>
+<script type="importmap">
+{
+  "imports": {
+    "typegpu": "https://esm.sh/typegpu",
+    "@huggingface/transformers": "https://esm.sh/@huggingface/transformers@3",
+    "@mediapipe/tasks-vision": "https://esm.sh/@mediapipe/tasks-vision@0.10"
+  }
+}
+</script>
+</head>
+<body>
+  <header>
+    <h1>空手挪灯 · 实时深度打光</h1>
+    <p>摄像头进画面 → DINOv2 估深度 → 手指当灯（跟手）→ TypeGPU/WebGPU 把光和影子打回实景</p>
+  </header>
+
+  <div class="wrap">
+    <div class="stage">
+      <canvas id="output"></canvas>
+      <video id="cam" autoplay playsinline muted></video>
+    </div>
+
+    <div class="controls">
+      <button id="start">▶ 启动摄像头</button>
+
+      <div class="row" style="margin-top:10px">
+        <input id="enableReal" type="checkbox" />
+        <label style="margin:0">启用真实 DINOv2（本地模型）</label>
+      </div>
+
+      <div class="light" id="lightLabel">💡 光源：默认</div>
+      <div class="fps" id="fps">FPS –</div>
+      <div class="status" id="status">点击启动，授权摄像头与模型下载。</div>
+
+      <label>灯光强度 <span id="v-intensity"></span></label>
+      <input id="intensity" type="range" min="0" max="2" step="0.05" value="1.0" />
+
+      <label>环境光（底色）</label>
+      <input id="ambient" type="range" min="0" max="1" step="0.02" value="0.35" />
+
+      <label>深度→法线强度 (depthScale)</label>
+      <input id="depthScale" type="range" min="0.2" max="8" step="0.1" value="3.0" />
+
+      <label>阴影柔和度 (shadowSoft)</label>
+      <input id="shadowSoft" type="range" min="0" max="30" step="0.5" value="10" />
+
+      <label>光源高度 (lightHeight)</label>
+      <input id="lightHeight" type="range" min="0.1" max="1.5" step="0.05" value="0.4" />
+
+      <div class="row">
+        <label style="margin:0">镜像</label>
+        <input id="mirror" type="checkbox" checked />
+        <label style="margin:0 0 0 12px">灯光颜色</label>
+        <input id="color" type="color" value="#ffd9a0" />
+      </div>
+
+      <div class="hint">
+        用法：把手伸进画面，食指尖就是灯；张手/捏合调节亮度。没有手时用鼠标移动灯。
+        默认走「亮度近似深度」，<b>点启动即可立刻出效果</b>（不卡、不下载）。
+        想用真实 DINOv2 时再勾选上方「启用真实 DINOv2（本地模型）」——它更准但更吃 GPU。
+        需要 https 或 localhost 才能用摄像头，且浏览器需支持 WebGPU（Chrome/Edge 113+）。
+      </div>
+    </div>
+  </div>
+
+  <script type="module" src="./main.js"></script>
+</body>
+</html>

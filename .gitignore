@@ -1,0 +1,7 @@
+# 本地深度模型（大文件，按 README 自行下载，不入库）
+models/
+
+# OS / editor junk
+.DS_Store
+Thumbs.db
+*.log
