@@ -104,21 +104,28 @@ fn fs(in : VSOut) -> @location(0) vec4f {
   let spec = pow(max(dot(normal, H), 0.0), 32.0) * atten * U.intensity * shadow;
   outc = outc + vec3f(spec) * 0.35;
 
-  // --- glowing sphere at the light position (the visible "lamp") ---
+  // --- the lamp: a hot glowing orb + a soft warm spill over the scene ---
+  // (matches the demo: bright white core, warm body, big soft halo that
+  //  bathes the room in the light's color)
   let d2 = vec2f((sx - lx) * U.aspect, in.uv.y - U.lightPos.y);
   let rr = length(d2);
   let Rb = U.lightRadius;
   if (rr < Rb) {
     let z = sqrt(max(Rb * Rb - rr * rr, 0.0));
-    let sn = vec3f(d2 / Rb, z / Rb);            // sphere normal, z out of screen
+    let sn = vec3f(d2 / Rb, z / Rb);
     let sdiff = clamp(sn.z, 0.0, 1.0);
-    let sspec = pow(sdiff, 22.0);
-    var sphere = U.lightColor * (0.4 + 0.9 * sdiff);
-    sphere = sphere + vec3f(1.0) * sspec * 0.9; // hot white highlight
-    outc = sphere;                              // orb occludes the scene
+    // body: emissive warm sphere
+    var sphere = U.lightColor * (0.55 + 0.75 * sdiff);
+    // hot white blown-out core
+    let hot = pow(sdiff, 32.0);
+    sphere = sphere + vec3f(1.0) * hot * 1.3;
+    outc = sphere;
   } else {
-    let glow = exp(-(rr - Rb) * 9.0) * clamp(U.intensity, 0.2, 2.0);
-    outc = outc + U.lightColor * glow * 0.9;    // soft halo over the scene
+    // tight warm bloom right around the orb
+    let bloom = exp(-(rr - Rb) * 6.0) * U.intensity;
+    // wide soft spill that lights the surrounding scene
+    let spill = exp(-rr * 3.0) * U.intensity * 0.4;
+    outc = outc + U.lightColor * (bloom * 1.0 + spill);
   }
 
   return vec4f(clamp(outc, vec3f(0.0), vec3f(1.0)), 1.0);
@@ -299,22 +306,33 @@ export class Canvas2DRenderer {
     const lx = uniforms.mirror ? (1 - uniforms.x) * w : uniforms.x * w;
     const ly = uniforms.y * h;
     const [r, gg, b] = uniforms.color;
-    const R = (uniforms.lightRadius || 0.06) * h;   // ball radius (px)
+    const R = (uniforms.lightRadius || 0.07) * h;   // ball radius (px)
+    const cr = (r * 255) | 0, cg = (gg * 255) | 0, cb = (b * 255) | 0;
 
-    // soft outer halo
-    const glow = ctx.createRadialGradient(lx, ly, R * 0.6, lx, ly, R * 4);
-    const ga = Math.min(uniforms.intensity * 0.6, 1.0);
-    glow.addColorStop(0, `rgba(${(r*255)|0},${(gg*255)|0},${(b*255)|0},${ga})`);
-    glow.addColorStop(1, 'rgba(0,0,0,0)');
+    // wide soft warm spill (lights the surrounding scene like the demo)
+    const spill = ctx.createRadialGradient(lx, ly, R, lx, ly, R * 8);
+    const sa = Math.min(uniforms.intensity * 0.22, 0.55);
+    spill.addColorStop(0, `rgba(${cr},${cg},${cb},${sa})`);
+    spill.addColorStop(1, 'rgba(0,0,0,0)');
     ctx.globalCompositeOperation = 'lighter';
-    ctx.fillStyle = glow;
+    ctx.fillStyle = spill;
     ctx.fillRect(0, 0, w, h);
 
-    // orb body (additive white core + colored shell)
-    const body = ctx.createRadialGradient(lx - R * 0.35, ly - R * 0.35, R * 0.1, lx, ly, R);
-    body.addColorStop(0, 'rgba(255,255,255,0.95)');
-    body.addColorStop(0.35, `rgba(${(r*255)|0},${(gg*255)|0},${(b*255)|0},1)`);
-    body.addColorStop(1, `rgba(${(r*255)|0},${(gg*255)|0},${(b*255)|0},0.9)`);
+    // tight warm bloom around the orb
+    const bloom = ctx.createRadialGradient(lx, ly, R * 0.5, lx, ly, R * 3);
+    const ba = Math.min(uniforms.intensity * 0.8, 1.0);
+    bloom.addColorStop(0, `rgba(${cr},${cg},${cb},${ba})`);
+    bloom.addColorStop(0.4, `rgba(${cr},${cg},${cb},${ba * 0.4})`);
+    bloom.addColorStop(1, 'rgba(0,0,0,0)');
+    ctx.fillStyle = bloom;
+    ctx.fillRect(0, 0, w, h);
+
+    // orb body: bright white core, warm shell
+    const body = ctx.createRadialGradient(lx - R * 0.3, ly - R * 0.3, R * 0.05, lx, ly, R);
+    body.addColorStop(0, 'rgba(255,255,255,1)');
+    body.addColorStop(0.22, 'rgba(255,250,240,1)');
+    body.addColorStop(0.5, `rgba(${cr},${cg},${cb},1)`);
+    body.addColorStop(1, `rgba(${cr},${cg},${cb},0.95)`);
     ctx.fillStyle = body;
     ctx.beginPath();
     ctx.arc(lx, ly, R, 0, Math.PI * 2);
