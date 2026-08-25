@@ -1,6 +1,11 @@
 # 本地深度模型（大文件，按 README 自行下载，不入库）
 models/
 
+# 临时分析产物（参考视频抽帧等，非项目源码）
+ref.mp4
+frames/
+_extract.py
+
 # OS / editor junk
 .DS_Store
 Thumbs.db
