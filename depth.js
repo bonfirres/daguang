@@ -20,6 +20,8 @@ env.backends.onnx.wasm.proxy = false;
 // Set USE_LOCAL = true after you drop the model files into
 //   hand-light-depth/models/depth-anything-small-hf/
 // (see README for the exact file list). Local loading needs no internet.
+// Even with USE_LOCAL=true, remote sources are kept as a fallback, so a
+// missing or mis-named local folder won't hard-fail the whole load.
 const USE_LOCAL = true;
 const LOCAL_MODEL_ID = 'depth-anything-small-hf'; // folder under localModelPath
 // Candidate remote sources, tried in order. Add/remove as needed.
@@ -35,10 +37,12 @@ const DEVICE_FALLBACKS = [
   { device: 'wasm', dtype: 'fp32' },
 ];
 
+// Local-first: prefer the model files in ./models/ when present, but keep the
+// remote allowed so a missing/typo'd folder transparently falls back to the
+// canonical remote source instead of hard-failing with a 404.
 if (USE_LOCAL) {
   env.allowLocalModels = true;
-  env.localModelPath = './models/'; // serves <origin>/models/depth-anything-small-hf/...
-  env.allowRemoteModels = false;
+  env.localModelPath = './models/';
 }
 
 export const DEPTH_W = 448;
@@ -97,7 +101,7 @@ export async function loadDepthModel(onStatus = () => {}) {
   // the background and switch over automatically when it's ready.
   onStatus('亮度近似深度已就绪（无需下载）；后台尝试加载真实 DINOv2…');
   (async () => {
-    const ids = USE_LOCAL ? [LOCAL_MODEL_ID] : REMOTE_MODEL_IDS;
+    const ids = USE_LOCAL ? [LOCAL_MODEL_ID, ...REMOTE_MODEL_IDS] : REMOTE_MODEL_IDS;
     let lastErr = null;
     for (const id of ids) {
       for (const cfg of DEVICE_FALLBACKS) {
