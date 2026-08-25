@@ -29,9 +29,15 @@ const REMOTE_MODEL_IDS = [
   'onnx-community/depth-anything-small-hf',
   'Xenova/depth-anything-small-hf',
 ];
-// For each source we try WebGPU first, then fall back to WASM (CPU) — the
-// earlier "load failed" was most likely a WebGPU session-init issue, and WASM
-// still runs the real model (just slower).
+// Force the depth model onto WebGPU. Your RTX 4060 (8GB) is more than enough.
+// The earlier silent fallback to WASM was onnxruntime-web failing its own
+// requestAdapter() on Windows (the "powerPreference ignored" warning); we
+// work around it by handing onnxruntime-web a GPUDevice we acquire ourselves.
+// Set this to false to allow the WASM fallback again.
+const FORCE_WEBGPU = true;
+// For each source we try WebGPU first (now made reliable via the shared
+// GPUDevice below), then fall back to WASM (CPU) only if WebGPU truly can't
+// run. WASM still runs the real model, just slower.
 const DEVICE_FALLBACKS = [
   { device: 'webgpu', dtype: 'fp32' },
   { device: 'wasm', dtype: 'fp32' },
@@ -93,6 +99,38 @@ function syntheticDepth(source) {
   return c;
 }
 
+// ---- WebGPU device sharing -------------------------------------------------
+// On Windows, onnxruntime-web's own requestAdapter() can fail (the
+// "powerPreference ignored" warning seen in console), silently dropping us to
+// WASM even though the GPU is fine. We acquire a GPUDevice ourselves and hand
+// it to onnxruntime-web so the WebGPU execution provider is actually used.
+// transformers.js initializes its onnx backend lazily, so we re-apply the
+// device right before each WebGPU pipeline attempt (idempotent + cached).
+let sharedGpuDevice = null;
+let sharedGpuTried = false;
+async function ensureWebGpuDevice() {
+  if (!sharedGpuTried) {
+    sharedGpuTried = true;
+    if (typeof navigator !== 'undefined' && navigator.gpu) {
+      try {
+        const adapter = await navigator.gpu.requestAdapter({ powerPreference: 'high-performance' });
+        if (adapter) {
+          sharedGpuDevice = await adapter.requestDevice();
+          console.log('[depth] acquired WebGPU device for onnxruntime-web');
+        }
+      } catch (e) {
+        console.warn('[depth] WebGPU device acquisition failed:', e);
+      }
+    }
+  }
+  // apply (or re-apply once the onnx backend env is ready)
+  if (sharedGpuDevice && env.backends?.onnx?.webgpu) {
+    env.backends.onnx.webgpu.device = sharedGpuDevice;
+    env.backends.onnx.webgpu.powerPreference = 'high-performance';
+  }
+  return sharedGpuDevice;
+}
+
 // ---- real model loading -----------------------------------------------------
 export async function loadDepthModel(onStatus = () => {}) {
   if (loadStarted) return;
@@ -101,11 +139,13 @@ export async function loadDepthModel(onStatus = () => {}) {
   // the background and switch over automatically when it's ready.
   onStatus('亮度近似深度已就绪（无需下载）；后台尝试加载真实 DINOv2…');
   (async () => {
+    await ensureWebGpuDevice();
     const ids = USE_LOCAL ? [LOCAL_MODEL_ID, ...REMOTE_MODEL_IDS] : REMOTE_MODEL_IDS;
     let lastErr = null;
     for (const id of ids) {
       for (const cfg of DEVICE_FALLBACKS) {
         try {
+          if (cfg.device === 'webgpu') await ensureWebGpuDevice();
           onStatus(`下载 DINOv2: ${id} (${cfg.device}) …`);
           pipe = await pipeline('depth-estimation', id, {
             ...cfg,
