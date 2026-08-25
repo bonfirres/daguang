@@ -23,6 +23,7 @@ const els = {
   depthScale: document.getElementById('depthScale'),
   shadowSoft: document.getElementById('shadowSoft'),
   lightHeight: document.getElementById('lightHeight'),
+  lightRadius: document.getElementById('lightRadius'),
   mirror: document.getElementById('mirror'),
   color: document.getElementById('color'),
   lightLabel: document.getElementById('lightLabel'),
@@ -98,6 +99,7 @@ function getUniforms() {
     depthScale: parseFloat(els.depthScale.value),
     shadowSoft: parseFloat(els.shadowSoft.value),
     lightHeight: parseFloat(els.lightHeight.value),
+    lightRadius: parseFloat(els.lightRadius.value),
     aspect: (els.video.videoWidth || 1280) / (els.video.videoHeight || 720),
     mirror: state.mirror ? 1 : 0,
     color: hexToRgb(els.color.value),
@@ -252,3 +254,19 @@ async function start() {
 }
 
 els.start.addEventListener('click', start);
+
+// live value readouts for the sliders
+function bindVal(id, fmt) {
+  const el = document.getElementById(id);
+  const span = document.getElementById('v-' + id);
+  if (!el || !span) return;
+  const upd = () => { span.textContent = fmt ? fmt(el.value) : el.value; };
+  el.addEventListener('input', upd);
+  upd();
+}
+bindVal('intensity', (v) => (+v).toFixed(2));
+bindVal('ambient', (v) => (+v).toFixed(2));
+bindVal('depthScale', (v) => (+v).toFixed(1));
+bindVal('shadowSoft', (v) => (+v).toFixed(1));
+bindVal('lightHeight', (v) => (+v).toFixed(2));
+bindVal('lightRadius', (v) => (+v).toFixed(3));

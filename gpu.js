@@ -25,6 +25,7 @@ struct Uniforms {
   aspect     : f32,    // 24
   lightHeight: f32,    // 28
   mirror     : f32,    // 32
+  lightRadius: f32,    // 36
   lightColor : vec3f,  // 48 (align 16)
   _pad       : f32,    // 60
 };
@@ -102,6 +103,23 @@ fn fs(in : VSOut) -> @location(0) vec4f {
   let H = normalize(L + V);
   let spec = pow(max(dot(normal, H), 0.0), 32.0) * atten * U.intensity * shadow;
   outc = outc + vec3f(spec) * 0.35;
+
+  // --- glowing sphere at the light position (the visible "lamp") ---
+  let d2 = vec2f((sx - lx) * U.aspect, in.uv.y - U.lightPos.y);
+  let rr = length(d2);
+  let Rb = U.lightRadius;
+  if (rr < Rb) {
+    let z = sqrt(max(Rb * Rb - rr * rr, 0.0));
+    let sn = vec3f(d2 / Rb, z / Rb);            // sphere normal, z out of screen
+    let sdiff = clamp(sn.z, 0.0, 1.0);
+    let sspec = pow(sdiff, 22.0);
+    var sphere = U.lightColor * (0.4 + 0.9 * sdiff);
+    sphere = sphere + vec3f(1.0) * sspec * 0.9; // hot white highlight
+    outc = sphere;                              // orb occludes the scene
+  } else {
+    let glow = exp(-(rr - Rb) * 9.0) * clamp(U.intensity, 0.2, 2.0);
+    outc = outc + U.lightColor * glow * 0.9;    // soft halo over the scene
+  }
 
   return vec4f(clamp(outc, vec3f(0.0), vec3f(1.0)), 1.0);
 }
@@ -233,6 +251,7 @@ export class GpuRenderer {
     u[4] = uniforms.depthScale; u[5] = uniforms.shadowSoft;
     u[6] = uniforms.aspect; u[7] = uniforms.lightHeight;
     u[8] = uniforms.mirror;
+    u[9] = uniforms.lightRadius || 0.06;
     u[12] = uniforms.color[0]; u[13] = uniforms.color[1]; u[14] = uniforms.color[2];
     // indices 9,10,11 and 15 are padding (zeros)
 
@@ -276,18 +295,31 @@ export class Canvas2DRenderer {
     ctx.drawImage(video, 0, 0, w, h);
     ctx.restore();
 
-    // additive light pool at the hand position
+    // glowing sphere at the hand position
     const lx = uniforms.mirror ? (1 - uniforms.x) * w : uniforms.x * w;
     const ly = uniforms.y * h;
-    const radius = Math.max(w, h) * 0.45;
-    const g = ctx.createRadialGradient(lx, ly, 0, lx, ly, radius);
     const [r, gg, b] = uniforms.color;
-    const a = uniforms.intensity * 0.6;
-    g.addColorStop(0, `rgba(${(r*255)|0},${(gg*255)|0},${(b*255)|0},${a})`);
-    g.addColorStop(1, 'rgba(0,0,0,0)');
+    const R = (uniforms.lightRadius || 0.06) * h;   // ball radius (px)
+
+    // soft outer halo
+    const glow = ctx.createRadialGradient(lx, ly, R * 0.6, lx, ly, R * 4);
+    const ga = Math.min(uniforms.intensity * 0.6, 1.0);
+    glow.addColorStop(0, `rgba(${(r*255)|0},${(gg*255)|0},${(b*255)|0},${ga})`);
+    glow.addColorStop(1, 'rgba(0,0,0,0)');
     ctx.globalCompositeOperation = 'lighter';
-    ctx.fillStyle = g;
+    ctx.fillStyle = glow;
     ctx.fillRect(0, 0, w, h);
+
+    // orb body (additive white core + colored shell)
+    const body = ctx.createRadialGradient(lx - R * 0.35, ly - R * 0.35, R * 0.1, lx, ly, R);
+    body.addColorStop(0, 'rgba(255,255,255,0.95)');
+    body.addColorStop(0.35, `rgba(${(r*255)|0},${(gg*255)|0},${(b*255)|0},1)`);
+    body.addColorStop(1, `rgba(${(r*255)|0},${(gg*255)|0},${(b*255)|0},0.9)`);
+    ctx.fillStyle = body;
+    ctx.beginPath();
+    ctx.arc(lx, ly, R, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.globalCompositeOperation = 'source-over';
 
     // depth-based darkening (cheap shadow feel): darken far areas
     ctx.globalCompositeOperation = 'multiply';
