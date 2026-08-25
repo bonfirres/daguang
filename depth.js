@@ -15,6 +15,13 @@
 import { pipeline, env } from '@huggingface/transformers';
 
 env.backends.onnx.wasm.proxy = false;
+// Build the webgpu backend object up-front so onnxruntime-web doesn't try its
+// own requestAdapter() on Windows (the "powerPreference ignored" warning). The
+// actual GPUDevice is injected by ensureWebGpuDevice() before each load.
+if (env.backends?.onnx) {
+  env.backends.onnx.webgpu = env.backends.onnx.webgpu || {};
+  env.backends.onnx.webgpu.powerPreference = 'high-performance';
+}
 
 // ---- model selection -------------------------------------------------------
 // Set USE_LOCAL = true after you drop the model files into
@@ -51,8 +58,12 @@ if (USE_LOCAL) {
   env.localModelPath = './models/';
 }
 
-export const DEPTH_W = 448;
-export const DEPTH_H = 336;
+// Depth estimation resolution. 1280×720 on your RTX 4060 (WebGPU) is smooth
+// and gives noticeably crisper shadow edges than the 448×336 default.
+// If you ever fall back to WASM (CPU), drop this back to 640×480 or 448×336
+// — 1280×720 on CPU would be painfully slow.
+export const DEPTH_W = 1280;
+export const DEPTH_H = 720;
 
 let pipe = null;
 let busy = false;
