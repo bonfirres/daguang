@@ -166,6 +166,20 @@ export async function loadDepthModel(onStatus = () => {}) {
               }
             },
           });
+          // One-shot warm-up + timing probe. onnxruntime-web's WebGPU backend
+          // still loads a small jsep WASM for op fallback, so the mere presence
+          // of ort-wasm in the console does NOT mean the model runs on CPU.
+          // This timing is the real tell: webgpu ≈ <40ms, wasm(CPU) ≫ 100ms.
+          try {
+            const probe = document.createElement('canvas');
+            probe.width = 256; probe.height = 192;
+            const pctx = probe.getContext('2d');
+            pctx.fillStyle = '#808080'; pctx.fillRect(0, 0, 256, 192);
+            const tProbe = performance.now();
+            await pipe(probe);
+            const dt = performance.now() - tProbe;
+            console.log(`[depth] 单帧深度推理耗时 ≈ ${dt.toFixed(1)}ms (${cfg.device})`);
+          } catch (e) { /* probe is best-effort */ }
           onStatus(`✅ DINOv2 真实深度已启用（${id} · ${cfg.device}，比近似更准）`);
           return;
         } catch (e) {
