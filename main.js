@@ -8,7 +8,7 @@
 //     downscale as fast as the model allows and updates the depth texture.
 // Hand tracking (MediaPipe) runs inside the render loop because it is cheap.
 
-import { loadDepthModel, estimateDepth, DEPTH_W, DEPTH_H } from './depth.js';
+import { loadDepthModel, estimateDepth, getDepthSize, setDepthResolution } from './depth.js';
 import { loadHandModel, detectHands } from './hands.js';
 import { GpuRenderer, Canvas2DRenderer } from './gpu.js';
 
@@ -28,6 +28,9 @@ const els = {
   color: document.getElementById('color'),
   lightLabel: document.getElementById('lightLabel'),
   enableReal: document.getElementById('enableReal'),
+  depthRes: document.getElementById('depthRes'),
+  winSize: document.getElementById('winSize'),
+  winSizeVal: document.getElementById('v-winSize'),
 };
 
 function sleep(ms) { return new Promise((r) => setTimeout(r, ms)); }
@@ -49,8 +52,9 @@ function setStatus(msg) { els.status.textContent = msg; }
 
 // initial placeholder depth (flat) so the renderer has something to sample
 function makePlaceholderDepth() {
+  const { w, h } = getDepthSize();
   const c = document.createElement('canvas');
-  c.width = DEPTH_W; c.height = DEPTH_H;
+  c.width = w; c.height = h;
   const ctx = c.getContext('2d');
   ctx.fillStyle = '#808080';
   ctx.fillRect(0, 0, c.width, c.height);
@@ -113,7 +117,8 @@ function hexToRgb(hex) {
 
 // ---- depth inference loop (decoupled, runs as fast as the model allows) ----
 const depthSrc = document.createElement('canvas');
-depthSrc.width = DEPTH_W; depthSrc.height = DEPTH_H;
+const _ds = getDepthSize();
+depthSrc.width = _ds.w; depthSrc.height = _ds.h;
 const depthCtx = depthSrc.getContext('2d', { willReadFrequently: false });
 
 // Throttle so the loop yields a real macrotask every iteration. Without the
@@ -125,7 +130,8 @@ async function depthLoop() {
   while (state.running) {
     const t0 = performance.now();
     if (els.video.readyState >= 2 && els.video.videoWidth) {
-      depthCtx.drawImage(els.video, 0, 0, DEPTH_W, DEPTH_H);
+      const { w, h } = getDepthSize();
+      depthCtx.drawImage(els.video, 0, 0, w, h);
       await estimateDepth(depthSrc, (canvas, ms) => {
         state.depthCanvas = canvas;
         state.depthReady = true;
@@ -217,6 +223,41 @@ els.enableReal.addEventListener('change', () => {
   if (els.enableReal.checked) {
     loadDepthModel(setStatus).catch((e) => setStatus('Depth model error: ' + e.message));
   }
+});
+
+// ---- depth-inference resolution selector ----
+// Changing resolution only resizes the depth source canvas + placeholder;
+// the (already loaded) model just ingests a different-sized frame, so no
+// reload is needed. Higher = crisper shadows but more GPU/CPU per frame.
+els.depthRes.addEventListener('change', () => {
+  const [w, h] = els.depthRes.value.split('x').map(Number);
+  setDepthResolution(w, h);
+  depthSrc.width = w; depthSrc.height = h;
+  state.depthCanvas = makePlaceholderDepth();
+  const tip = w >= 1280 ? '（高分辨率建议走 WebGPU）'
+            : w <= 448 ? '（轻量，WASM/CPU 也流畅）' : '';
+  setStatus(`深度推理分辨率：${w}×${h}${tip}`);
+});
+
+// ---- demo window (display) size slider ----
+// Controls the on-screen size of the output canvas only. Internal render
+// resolution stays at the camera frame; light position mapping uses the live
+// bounding rect, so it stays correct at any display size.
+function applyWinSize(px, updateLabel = true) {
+  els.canvas.style.width = px + 'px';
+  els.canvas.style.height = 'auto';
+  if (updateLabel) els.winSizeVal.textContent = px + 'px';
+}
+els.winSize.addEventListener('input', () => {
+  applyWinSize(parseInt(els.winSize.value, 10));
+});
+// Seed the slider with the canvas's natural width once layout is ready, so it
+// starts "filling the stage" and the thumb matches reality. We only switch to
+// explicit px sizing once the user actually drags the slider.
+requestAnimationFrame(() => {
+  const natural = Math.round(els.canvas.clientWidth) || 720;
+  els.winSize.value = Math.max(320, Math.min(1600, natural));
+  els.winSizeVal.textContent = '自适应 (' + els.winSize.value + 'px)';
 });
 
 async function start() {

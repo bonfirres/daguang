@@ -62,8 +62,15 @@ if (USE_LOCAL) {
 // and gives noticeably crisper shadow edges than the 448×336 default.
 // If you ever fall back to WASM (CPU), drop this back to 640×480 or 448×336
 // — 1280×720 on CPU would be painfully slow.
-export const DEPTH_W = 1280;
-export const DEPTH_H = 720;
+// These are mutable so the UI selector can change them at runtime without
+// reloading the model: call setDepthResolution() and re-make the placeholder.
+let DEPTH_W = 1280;
+let DEPTH_H = 720;
+export function getDepthSize() { return { w: DEPTH_W, h: DEPTH_H }; }
+export function setDepthResolution(w, h) {
+  DEPTH_W = w | 0;
+  DEPTH_H = h | 0;
+}
 
 let pipe = null;
 let busy = false;
