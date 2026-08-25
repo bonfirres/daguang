@@ -27,7 +27,7 @@ struct Uniforms {
   mirror     : f32,    // 32
   lightRadius: f32,    // 36
   lightColor : vec3f,  // 48 (align 16)
-  _pad       : f32,    // 60
+  videoAspect: f32,    // 60  (native camera aspect, for cover-fit)
 };
 
 @group(0) @binding(0) var samp     : sampler;
@@ -62,33 +62,48 @@ fn sampleDepth(uv : vec2f) -> f32 {
 @fragment
 fn fs(in : VSOut) -> @location(0) vec4f {
   let m = select(0.0, 1.0, U.mirror > 0.5);
-  let sx = in.uv.x * (1.0 - 2.0 * m) + m;            // mirrored sample x
-  let lx = U.lightPos.x * (1.0 - 2.0 * m) + m;        // mirrored light x
+  let d = in.uv;                                   // display uv (0..1)
 
-  let color = textureSampleLevel(camTex, samp, vec2f(sx, in.uv.y), 0.0).rgb;
+  // --- cover-fit: map display uv -> source uv so a landscape webcam fills any
+  // box (portrait/square included) without stretching. Rc = display/video.
+  let Rc = U.aspect / U.videoAspect;
+  var suv = d;
+  if (Rc > 1.0) { suv = vec2f(d.x, (d.y - 0.5) / Rc + 0.5); }
+  else          { suv = vec2f((d.x - 0.5) * Rc + 0.5, d.y); }
+  let sx = suv.x * (1.0 - 2.0 * m) + m;            // mirrored source x
+  let sy = suv.y;
+
+  let color = textureSampleLevel(camTex, samp, vec2f(sx, sy), 0.0).rgb;
 
   let dim = textureDimensions(camTex);
   let texel = vec2f(1.0 / f32(dim.x), 1.0 / f32(dim.y));
-  let dx = sampleDepth(vec2f(sx, in.uv.y) + vec2f(texel.x, 0.0))
-         - sampleDepth(vec2f(sx, in.uv.y) - vec2f(texel.x, 0.0));
-  let dy = sampleDepth(vec2f(sx, in.uv.y) + vec2f(0.0, texel.y))
-         - sampleDepth(vec2f(sx, in.uv.y) - vec2f(0.0, texel.y));
-  let normal = normalize(vec3f(-dx * U.depthScale, -dy * U.depthScale, 1.0));
+  let gx = sampleDepth(vec2f(sx + texel.x, sy)) - sampleDepth(vec2f(sx - texel.x, sy));
+  let gy = sampleDepth(vec2f(sx, sy + texel.y)) - sampleDepth(vec2f(sx, sy - texel.y));
+  let normal = normalize(vec3f(-gx * U.depthScale, -gy * U.depthScale, 1.0));
 
-  let frag  = vec2f(sx * U.aspect, in.uv.y);
-  let light = vec2f(lx * U.aspect, U.lightPos.y);
+  // light position in source uv (cover + mirror of the display light pos)
+  let dlight = U.lightPos;                         // display uv
+  var luv = dlight;
+  if (Rc > 1.0) { luv = vec2f(dlight.x, (dlight.y - 0.5) / Rc + 0.5); }
+  else          { luv = vec2f((dlight.x - 0.5) * Rc + 0.5, dlight.y); }
+  let lx = luv.x * (1.0 - 2.0 * m) + m;
+  let ly = luv.y;
+
+  // lighting geometry in DISPLAY space so the orb/spill stay circular on screen
+  let frag  = vec2f(d.x * U.aspect, d.y);
+  let light = vec2f(dlight.x * U.aspect, dlight.y);
   var toLight = vec3f(light - frag, U.lightHeight);
   let dist = length(toLight);
   let L = toLight / max(dist, 1e-4);
 
-  // screen-space shadow march from fragment toward the light
+  // screen-space shadow march from fragment toward the light (source space)
   var occ = 0.0;
   let steps = 18;
-  let baseD = sampleDepth(vec2f(sx, in.uv.y));
+  let baseD = sampleDepth(vec2f(sx, sy));
   for (var i = 1; i <= steps; i = i + 1) {
     let t = f32(i) / f32(steps);
-    let suv = mix(vec2f(sx, in.uv.y), vec2f(lx, U.lightPos.y), t);
-    let sd = sampleDepth(suv);
+    let suv_m = mix(vec2f(sx, sy), vec2f(lx, ly), t);
+    let sd = sampleDepth(suv_m);
     let diff = baseD - sd;            // >0 => a closer surface sits between us and the light
     occ = occ + max(0.0, diff) * exp(-t * 3.0);
   }
@@ -106,13 +121,14 @@ fn fs(in : VSOut) -> @location(0) vec4f {
 
   // --- the lamp: a hot glowing orb + a soft warm spill over the scene ---
   // (matches the demo: bright white core, warm body, big soft halo that
-  //  bathes the room in the light's color)
-  let d2 = vec2f((sx - lx) * U.aspect, in.uv.y - U.lightPos.y);
-  let rr = length(d2);
+  //  bathes the room in the light's color). Geometry is in DISPLAY space so
+  //  the orb stays a circle at any window aspect ratio.
+  let dd = vec2f((d.x - dlight.x) * U.aspect, d.y - dlight.y);
+  let rr = length(dd);
   let Rb = U.lightRadius;
   if (rr < Rb) {
     let z = sqrt(max(Rb * Rb - rr * rr, 0.0));
-    let sn = vec3f(d2 / Rb, z / Rb);
+    let sn = vec3f(dd / Rb, z / Rb);
     let sdiff = clamp(sn.z, 0.0, 1.0);
     // body: emissive warm sphere
     var sphere = U.lightColor * (0.55 + 0.75 * sdiff);
@@ -260,7 +276,8 @@ export class GpuRenderer {
     u[8] = uniforms.mirror;
     u[9] = uniforms.lightRadius || 0.06;
     u[12] = uniforms.color[0]; u[13] = uniforms.color[1]; u[14] = uniforms.color[2];
-    // indices 9,10,11 and 15 are padding (zeros)
+    u[15] = uniforms.videoAspect || (16 / 9);   // for cover-fit
+    // indices 9,10,11 stay zero (padding)
 
     device.queue.writeBuffer(this.uniformBuffer, 0, u);
 
@@ -289,24 +306,23 @@ export class Canvas2DRenderer {
 
   renderFrame(video, depthCanvas, uniforms) {
     const ctx = this.ctx;
-    const w = video.videoWidth || 640;
-    const h = video.videoHeight || 480;
-    if (this.canvas.width !== w) this.canvas.width = w;
-    if (this.canvas.height !== h) this.canvas.height = h;
+    const cw = this.canvas.width, ch = this.canvas.height;   // display box (layout owns size)
+    const vw = video.videoWidth || 640, vh = video.videoHeight || 480;
+    // cover-fit the (landscape) camera into the possibly-portrait canvas
+    const scale = Math.max(cw / vw, ch / vh);
+    const dw = vw * scale, dh = vh * scale;
+    const dx = (cw - dw) / 2, dy = (ch - dh) / 2;
 
     ctx.save();
-    if (uniforms.mirror) {
-      ctx.translate(w, 0);
-      ctx.scale(-1, 1);
-    }
-    ctx.drawImage(video, 0, 0, w, h);
+    if (uniforms.mirror) { ctx.translate(cw, 0); ctx.scale(-1, 1); }
+    ctx.drawImage(video, dx, dy, dw, dh);
     ctx.restore();
 
-    // glowing sphere at the hand position
-    const lx = uniforms.mirror ? (1 - uniforms.x) * w : uniforms.x * w;
-    const ly = uniforms.y * h;
+    // glowing sphere at the hand position (display-space coords)
+    const lx = uniforms.mirror ? (1 - uniforms.x) * cw : uniforms.x * cw;
+    const ly = uniforms.y * ch;
     const [r, gg, b] = uniforms.color;
-    const R = (uniforms.lightRadius || 0.07) * h;   // ball radius (px)
+    const R = (uniforms.lightRadius || 0.07) * ch;   // ball radius (px)
     const cr = (r * 255) | 0, cg = (gg * 255) | 0, cb = (b * 255) | 0;
 
     // wide soft warm spill (lights the surrounding scene like the demo)
@@ -316,7 +332,7 @@ export class Canvas2DRenderer {
     spill.addColorStop(1, 'rgba(0,0,0,0)');
     ctx.globalCompositeOperation = 'lighter';
     ctx.fillStyle = spill;
-    ctx.fillRect(0, 0, w, h);
+    ctx.fillRect(0, 0, cw, ch);
 
     // tight warm bloom around the orb
     const bloom = ctx.createRadialGradient(lx, ly, R * 0.5, lx, ly, R * 3);
@@ -325,7 +341,7 @@ export class Canvas2DRenderer {
     bloom.addColorStop(0.4, `rgba(${cr},${cg},${cb},${ba * 0.4})`);
     bloom.addColorStop(1, 'rgba(0,0,0,0)');
     ctx.fillStyle = bloom;
-    ctx.fillRect(0, 0, w, h);
+    ctx.fillRect(0, 0, cw, ch);
 
     // orb body: bright white core, warm shell
     const body = ctx.createRadialGradient(lx - R * 0.3, ly - R * 0.3, R * 0.05, lx, ly, R);
@@ -342,7 +358,7 @@ export class Canvas2DRenderer {
     // depth-based darkening (cheap shadow feel): darken far areas
     ctx.globalCompositeOperation = 'multiply';
     ctx.globalAlpha = uniforms.ambient * 0.5;
-    ctx.drawImage(depthCanvas, 0, 0, w, h);
+    ctx.drawImage(depthCanvas, 0, 0, cw, ch);
     ctx.globalAlpha = 1;
     ctx.globalCompositeOperation = 'source-over';
   }

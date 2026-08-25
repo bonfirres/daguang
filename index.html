@@ -71,8 +71,15 @@
         <option value="1920x1080">1920 × 1080（极致·需 WebGPU）</option>
       </select>
 
-      <label>演示窗口大小 <span id="v-winSize"></span></label>
+      <label>演示窗口大小（宽）<span id="v-winSize"></span></label>
       <input id="winSize" type="range" min="320" max="1600" step="20" value="720" />
+
+      <label>画面方向</label>
+      <select id="orient" style="width:100%; padding:8px; border:1px solid var(--line); border-radius:8px; font-size:13px;">
+        <option value="1.7778" selected>横屏 16:9</option>
+        <option value="0.5625">竖屏 9:16</option>
+        <option value="1">正方形 1:1</option>
+      </select>
 
       <div class="light" id="lightLabel">💡 光源：默认</div>
       <div class="fps" id="fps">FPS –</div>
@@ -107,7 +114,7 @@
         用法：把手伸进画面，食指尖就是灯；张手/捏合调节亮度。没有手时用鼠标移动灯。
         默认走「亮度近似深度」，<b>点启动即可立刻出效果</b>（不卡、不下载）。
         想用真实 DINOv2 时再勾选上方「启用真实 DINOv2（本地模型）」——它更准但更吃 GPU。
-        「深度推理分辨率」可调模型输入尺寸：调高影子边缘更锐利但更吃算力；「演示窗口大小」只改画面上预览窗口的显示尺寸，不影响摄像头原始分辨率。
+        「深度推理分辨率」可调模型输入尺寸：调高影子边缘更锐利但更吃算力；「演示窗口大小（宽）」+「画面方向」一起决定预览窗口的形状和大小——横屏/竖屏/正方形随意切，画面会自动 cover 裁切铺满、不变形；光源位置始终跟手。
         需要 https 或 localhost 才能用摄像头，且浏览器需支持 WebGPU（Chrome/Edge 113+）。
       </div>
     </div>

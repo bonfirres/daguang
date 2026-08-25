@@ -31,6 +31,7 @@ const els = {
   depthRes: document.getElementById('depthRes'),
   winSize: document.getElementById('winSize'),
   winSizeVal: document.getElementById('v-winSize'),
+  orient: document.getElementById('orient'),
 };
 
 function sleep(ms) { return new Promise((r) => setTimeout(r, ms)); }
@@ -72,9 +73,9 @@ async function startCamera() {
   if (!els.video.videoWidth) {
     await new Promise((r) => { els.video.onloadedmetadata = r; });
   }
-  // size the output canvas to the camera frame
-  els.canvas.width = els.video.videoWidth;
-  els.canvas.height = els.video.videoHeight;
+  // NOTE: the output canvas size is owned by layoutCanvas() (driven by the
+  // window-size + orientation controls), not by the camera frame, so the
+  // demo can be portrait/square regardless of the landscape webcam.
 }
 
 async function initRenderer() {
@@ -87,7 +88,6 @@ async function initRenderer() {
     setStatus('WebGPU renderer ready (TypeGPU device).');
   } catch (e) {
     console.warn('Falling back to 2D canvas renderer:', e.message);
-    els.canvas.width = 1280; els.canvas.height = 720;
     state.renderer = new Canvas2DRenderer(els.canvas);
     state.useWebGPU = false;
     setStatus('2D fallback renderer (no WebGPU): ' + e.message);
@@ -104,10 +104,22 @@ function getUniforms() {
     shadowSoft: parseFloat(els.shadowSoft.value),
     lightHeight: parseFloat(els.lightHeight.value),
     lightRadius: parseFloat(els.lightRadius.value),
-    aspect: (els.video.videoWidth || 1280) / (els.video.videoHeight || 720),
+    aspect: (els.canvas.width || 1280) / (els.canvas.height || 720),
+    videoAspect: (els.video.videoWidth || 1280) / (els.video.videoHeight || 720),
     mirror: state.mirror ? 1 : 0,
     color: hexToRgb(els.color.value),
   };
+}
+
+// Map a coordinate in the raw (landscape) camera frame to the DISPLAY frame,
+// undoing the renderer's "cover" crop so the hand light lands where the hand
+// actually appears on screen — for any window aspect ratio.
+function sourceToDisplay(sx, sy) {
+  const a = (els.canvas.width / els.canvas.height) || 1;             // display aspect
+  const b = (els.video.videoWidth / els.video.videoHeight) || (16 / 9); // video aspect
+  const R = a / b;
+  if (R > 1) return [sx, (sy - 0.5) * R + 0.5];
+  return [(sx - 0.5) / R + 0.5, sy];
 }
 
 function hexToRgb(hex) {
@@ -161,9 +173,9 @@ function renderLoop() {
   if (state.handReady) {
     const h = detectHands(els.video, now);
     if (h.present) {
-      const rawX = h.x, rawY = h.y;
-      const displayX = state.mirror ? (1 - rawX) : rawX;
-      target = { x: displayX, y: rawY, intensity: h.intensity };
+      const [dx, dy] = sourceToDisplay(h.x, h.y);
+      const displayX = state.mirror ? (1 - dx) : dx;
+      target = { x: displayX, y: dy, intensity: h.intensity };
       els.lightLabel.textContent = '💡 光源：手指 (DINOv2 + 跟手)';
     }
   }
@@ -239,25 +251,33 @@ els.depthRes.addEventListener('change', () => {
   setStatus(`深度推理分辨率：${w}×${h}${tip}`);
 });
 
-// ---- demo window (display) size slider ----
-// Controls the on-screen size of the output canvas only. Internal render
-// resolution stays at the camera frame; light position mapping uses the live
-// bounding rect, so it stays correct at any display size.
-function applyWinSize(px, updateLabel = true) {
-  els.canvas.style.width = px + 'px';
-  els.canvas.style.height = 'auto';
-  if (updateLabel) els.winSizeVal.textContent = px + 'px';
+// ---- demo window layout: display width (slider) × orientation (aspect) ----
+// Both the CSS display box AND the canvas backing store follow this, so the
+// rendered image is never stretch-distorted. The renderer does a "cover" fit
+// of the landscape webcam into whatever box you pick (portrait included).
+function layoutCanvas() {
+  const w = parseInt(els.winSize.value, 10);
+  const aspect = parseFloat(els.orient.value); // e.g. 16/9, 9/16, 1
+  const h = Math.round(w / aspect);
+  els.canvas.style.width = w + 'px';
+  els.canvas.style.height = h + 'px';
+  // backing store: match display × DPR, clamped so we never allocate a huge
+  // texture (keeps WebGPU/2D happy on every GPU). Aspect is preserved.
+  const dpr = Math.min(window.devicePixelRatio || 1, 2);
+  let iw = Math.round(w * dpr), ih = Math.round(h * dpr);
+  const cap = Math.max(iw, ih);
+  if (cap > 1920) { const s = 1920 / cap; iw = Math.round(iw * s); ih = Math.round(ih * s); }
+  els.canvas.width = iw; els.canvas.height = ih;
+  els.winSizeVal.textContent = `${w}×${h}px`;
 }
-els.winSize.addEventListener('input', () => {
-  applyWinSize(parseInt(els.winSize.value, 10));
-});
-// Seed the slider with the canvas's natural width once layout is ready, so it
-// starts "filling the stage" and the thumb matches reality. We only switch to
-// explicit px sizing once the user actually drags the slider.
+els.winSize.addEventListener('input', layoutCanvas);
+els.orient.addEventListener('change', layoutCanvas);
+// Seed the width slider with the canvas's natural width (fills the stage),
+// then apply the initial layout (landscape by default).
 requestAnimationFrame(() => {
   const natural = Math.round(els.canvas.clientWidth) || 720;
   els.winSize.value = Math.max(320, Math.min(1600, natural));
-  els.winSizeVal.textContent = '自适应 (' + els.winSize.value + 'px)';
+  layoutCanvas();
 });
 
 async function start() {
